@@ -29,9 +29,9 @@ applicable copyright law, and any other regulation in your jurisdiction.
 The software is provided "as is", without warranty of any kind — see
 [LICENSE](LICENSE).
 
-**Ce plugin nécessite l'installation de `yt-dlp` pour fonctionner.
-L'utilisateur est responsable du respect des conditions d'utilisation des
-plateformes tiers lors de l'usage de cet outil.**
+**This plugin requires `yt-dlp` to be installed to work. The user is
+responsible for complying with third-party platforms' terms of service when
+using this tool.**
 
 ## Prerequisites
 
