@@ -29,6 +29,21 @@ applicable copyright law, and any other regulation in your jurisdiction.
 The software is provided "as is", without warranty of any kind — see
 [LICENSE](LICENSE).
 
+**Ce plugin nécessite l'installation de `yt-dlp` pour fonctionner.
+L'utilisateur est responsable du respect des conditions d'utilisation des
+plateformes tiers lors de l'usage de cet outil.**
+
+## Prerequisites
+
+Install these on the same host/container as Jellyfin before using the plugin:
+
+- **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** — resolves the actual video
+  stream at playback time. Required.
+- **[Deno](https://deno.com/)** — JS runtime yt-dlp uses to solve YouTube's
+  n-challenge, needed for 1080p+ formats to resolve. Required by the default
+  `YtDlpExtraArgs` config (`--js-runtimes deno:/usr/bin/deno`); adjust the path
+  or remove the flag if you install Deno elsewhere or don't need >720p.
+
 ## Quick install (Jellyfin plugin repository)
 
 1. **Dashboard → Plugins → Repositories → Add Repository**.
