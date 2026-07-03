@@ -1,3 +1,0 @@
-/home/remy/Bureau/publish/Jellyfin.Plugin.YouTubeFast.dll
-/home/remy/Bureau/publish/Jellyfin.Plugin.YouTubeFast.deps.json
-/home/remy/Bureau/publish/Jellyfin.Plugin.YouTubeFast.pdb
