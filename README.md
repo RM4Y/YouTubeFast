@@ -29,6 +29,18 @@ applicable copyright law, and any other regulation in your jurisdiction.
 The software is provided "as is", without warranty of any kind — see
 [LICENSE](LICENSE).
 
+## Quick install (Jellyfin plugin repository)
+
+1. **Dashboard → Plugins → Repositories → Add Repository**.
+2. Repository name: `YouTube Fast`. Repository URL:
+   `https://raw.githubusercontent.com/RM4Y/YouTubeFast/main/manifest.json`
+3. **Dashboard → Plugins → Catalog**, find **YouTube Fast**, install it, then
+   restart Jellyfin.
+
+This pulls the latest release automatically — no manual build/deploy needed.
+Skip straight to [step 4 (Configure)](#4-configure) once installed. The steps
+below (Build/Deploy) are only needed if you want to build from source instead.
+
 ## 1. Get a YouTube Data API key (free)
 
 1. Go to <https://console.cloud.google.com/>.
