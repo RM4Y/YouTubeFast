@@ -8,6 +8,14 @@
     "category": "Channels",
     "versions": [
       {
+        "version": "1.11.0.1",
+        "targetAbi": "10.11.6.0",
+        "sourceUrl": "https://github.com/RM4Y/YouTubeFast/releases/download/v1.11.0.1-dev/youtube-fast-1.11.0.1-dev.zip",
+        "checksum": "702698d3cbf1daf05c59565c59619e2a",
+        "timestamp": "2026-07-04T18:29:00Z",
+        "changelog": "Dev build: fixes duplicate video folders when a YouTuber renames a video after publishing. Pre-release from the dev branch, not the stable release."
+      },
+      {
         "version": "1.11.0.0",
         "targetAbi": "10.11.6.0",
         "sourceUrl": "https://github.com/RM4Y/YouTubeFast/releases/download/v1.11.0.0/youtube-fast-1.11.0.0.zip",
