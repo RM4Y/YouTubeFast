@@ -266,6 +266,13 @@ public class YouTubeSyncTask : IScheduledTask
         var videos = await api.GetPlaylistVideosAsync(playlistId, cutoff, ct).ConfigureAwait(false);
         _logger.LogInformation("Source {Name}: {Count} videos within window", source.Name, videos.Count);
 
+        // Merge any duplicate folders left over from title changes before this
+        // fix existed, then index what remains by video id so a video whose
+        // title changes from here on gets its folder renamed instead of a
+        // duplicate written under the new title.
+        writer.DeduplicateVideoFolders(sourceRoot);
+        var videoIndex = writer.BuildVideoIndex(sourceRoot);
+
         // We need durations to detect Shorts, so fetch details if either the user
         // asked for them or this source excludes Shorts.
         var needDetails = config.FetchVideoDetails || source.ExcludeShorts;
@@ -294,7 +301,7 @@ public class YouTubeSyncTask : IScheduledTask
                         // just re-enabled), then drop them from this run.
                         foreach (var sv in videos.FindAll(v => tabShorts.Contains(v.VideoId)))
                         {
-                            writer.RemoveVideoIfExists(sourceRoot, source, sv);
+                            writer.RemoveVideoIfExists(sourceRoot, source, sv, videoIndex);
                         }
 
                         var beforeTab = videos.Count;
@@ -356,7 +363,7 @@ public class YouTubeSyncTask : IScheduledTask
                 // Delete any Short already written, then drop them from this run.
                 foreach (var v in videos.FindAll(v => shortIds.ContainsKey(v.VideoId)))
                 {
-                    writer.RemoveVideoIfExists(sourceRoot, source, v);
+                    writer.RemoveVideoIfExists(sourceRoot, source, v, videoIndex);
                 }
 
                 videos = videos.FindAll(v => !shortIds.ContainsKey(v.VideoId));
@@ -380,7 +387,7 @@ public class YouTubeSyncTask : IScheduledTask
             episode++;
             var strmTarget = $"{baseAddress}/YouTubeFast/Stream/{video.VideoId}";
 
-            var created = await writer.WriteVideoAsync(sourceRoot, source, video, episode, strmTarget, ct)
+            var created = await writer.WriteVideoAsync(sourceRoot, source, video, episode, strmTarget, videoIndex, ct)
                 .ConfigureAwait(false);
             if (created)
             {
@@ -435,6 +442,8 @@ public class YouTubeSyncTask : IScheduledTask
                 isSeries: true,
                 ct).ConfigureAwait(false);
 
+            writer.DeduplicateVideoFolders(channelRoot);
+            var videoIndex = writer.BuildVideoIndex(channelRoot);
             var keep = new HashSet<string>(StringComparer.Ordinal);
             var source = new SourceItem { Mode = "Series", Name = VideosFolderName };
             var episode = 0;
@@ -484,7 +493,7 @@ public class YouTubeSyncTask : IScheduledTask
                 };
 
                 var strmTarget = $"{baseAddress}/YouTubeFast/Stream/{uv.VideoId}";
-                var created = await writer.WriteVideoAsync(channelRoot, source, video, episode, strmTarget, ct)
+                var created = await writer.WriteVideoAsync(channelRoot, source, video, episode, strmTarget, videoIndex, ct)
                     .ConfigureAwait(false);
 
                 if (created)
