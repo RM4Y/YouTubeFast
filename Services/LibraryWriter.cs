@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -80,12 +81,28 @@ public class LibraryWriter
     /// <summary>
     /// Deletes a previously-written video folder if it exists. Used to remove
     /// Shorts that were imported before the source started excluding them.
-    /// Returns true if something was deleted.
+    /// Returns true if something was deleted. When <paramref name="videoIndex"/>
+    /// is supplied, the folder is located by video id (so it's found even if the
+    /// title changed since it was written); otherwise it falls back to the
+    /// current title.
     /// </summary>
-    public bool RemoveVideoIfExists(string sourceRoot, SourceItem source, YouTubeVideo video)
+    public bool RemoveVideoIfExists(
+        string sourceRoot,
+        SourceItem source,
+        YouTubeVideo video,
+        IDictionary<string, string>? videoIndex = null)
     {
-        var safeTitle = Sanitize(video.Title);
-        var videoDir = Path.Combine(sourceRoot, safeTitle);
+        string videoDir;
+        if (videoIndex is not null
+            && videoIndex.TryGetValue(video.VideoId, out var existingDir)
+            && Directory.Exists(existingDir))
+        {
+            videoDir = existingDir;
+        }
+        else
+        {
+            videoDir = Path.Combine(sourceRoot, Sanitize(video.Title));
+        }
 
         try
         {
@@ -93,6 +110,7 @@ public class LibraryWriter
             {
                 Directory.Delete(videoDir, recursive: true);
                 _logger.LogInformation("Removed Short folder: {Dir}", videoDir);
+                videoIndex?.Remove(video.VideoId);
                 return true;
             }
         }
@@ -102,6 +120,114 @@ public class LibraryWriter
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Scans <paramref name="sourceRoot"/> for existing video folders and
+    /// returns a videoId -> folder path map, read from the .ytmeta markers.
+    /// Used to detect a video whose title changed since the last sync, so its
+    /// existing folder can be renamed instead of a duplicate being written
+    /// under the new title.
+    /// </summary>
+    public Dictionary<string, string> BuildVideoIndex(string sourceRoot)
+    {
+        var index = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!Directory.Exists(sourceRoot))
+        {
+            return index;
+        }
+
+        foreach (var marker in Directory.EnumerateFiles(sourceRoot, VideoMarker, SearchOption.AllDirectories))
+        {
+            try
+            {
+                var id = File.ReadAllText(marker).Split('|')[0];
+                var dir = Path.GetDirectoryName(marker);
+                if (!string.IsNullOrEmpty(id) && dir is not null)
+                {
+                    index[id] = dir;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to index marker {Marker}", marker);
+            }
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// Finds video folders under <paramref name="sourceRoot"/> that share the
+    /// same video id -- duplicates left over from a title change that predates
+    /// the rename-in-place fix, where the old and new title each got their own
+    /// folder -- and deletes all but the most recently written one. Safe to run
+    /// on every sync; a no-op once nothing is left to merge.
+    /// </summary>
+    public void DeduplicateVideoFolders(string sourceRoot)
+    {
+        if (!Directory.Exists(sourceRoot))
+        {
+            return;
+        }
+
+        var byId = new Dictionary<string, List<(string Dir, DateTime WrittenUtc)>>(StringComparer.Ordinal);
+
+        foreach (var marker in Directory.EnumerateFiles(sourceRoot, VideoMarker, SearchOption.AllDirectories))
+        {
+            try
+            {
+                var parts = File.ReadAllText(marker).Split('|');
+                var id = parts.Length > 0 ? parts[0] : string.Empty;
+                var dir = Path.GetDirectoryName(marker);
+                if (string.IsNullOrEmpty(id) || dir is null)
+                {
+                    continue;
+                }
+
+                if (!byId.TryGetValue(id, out var list))
+                {
+                    list = new List<(string, DateTime)>();
+                    byId[id] = list;
+                }
+
+                list.Add((dir, File.GetLastWriteTimeUtc(marker)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read marker {Marker} during dedup scan", marker);
+            }
+        }
+
+        foreach (var dirs in byId.Values)
+        {
+            if (dirs.Count < 2)
+            {
+                continue;
+            }
+
+            // Keep the most recently written copy (most likely the one that
+            // reflects the current title); drop the rest.
+            var keeper = dirs.OrderByDescending(d => d.WrittenUtc).First().Dir;
+            foreach (var (dir, _) in dirs)
+            {
+                if (string.Equals(dir, keeper, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                    _logger.LogInformation(
+                        "Removed duplicate video folder left over from a title change: {Dir}", dir);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to remove duplicate video folder {Dir}", dir);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -142,6 +268,9 @@ public class LibraryWriter
     /// <summary>
     /// Writes a single video into {sourceRoot}/{Title}/. Returns false if it
     /// already existed. strmTarget is the URL written into the .strm file.
+    /// When <paramref name="videoIndex"/> is supplied and this video's id is
+    /// already on disk under a different (older) title, the existing folder is
+    /// renamed in place instead of writing a duplicate under the new title.
     /// </summary>
     public async Task<bool> WriteVideoAsync(
         string sourceRoot,
@@ -149,18 +278,44 @@ public class LibraryWriter
         YouTubeVideo video,
         int episodeNumber,
         string strmTarget,
+        IDictionary<string, string>? videoIndex,
         CancellationToken ct)
     {
         var safeTitle = Sanitize(video.Title);
         var videoDir = Path.Combine(sourceRoot, safeTitle);
         var isSeries = !string.Equals(source.Mode, "Movies", StringComparison.OrdinalIgnoreCase);
 
+        var renamed = false;
+        if (videoIndex is not null
+            && videoIndex.TryGetValue(video.VideoId, out var existingDir)
+            && !string.Equals(Normalize(existingDir), Normalize(videoDir), StringComparison.OrdinalIgnoreCase)
+            && Directory.Exists(existingDir))
+        {
+            renamed = RenameVideoFolder(existingDir, videoDir, safeTitle);
+            if (renamed)
+            {
+                videoIndex[video.VideoId] = videoDir;
+            }
+        }
+
         var strmPath = Path.Combine(videoDir, safeTitle + ".strm");
         var markerPath = Path.Combine(videoDir, VideoMarker);
 
-        if (File.Exists(strmPath) && File.Exists(markerPath))
+        if (!renamed && File.Exists(strmPath) && File.Exists(markerPath))
         {
             return false; // already synced
+        }
+
+        if (renamed && File.Exists(strmPath) && File.Exists(markerPath))
+        {
+            // Title changed: folder was renamed above, just refresh the .nfo
+            // so the displayed title matches (episode number may have shifted
+            // too, since renumbering is chronological).
+            var refreshedNfo = isSeries
+                ? BuildEpisodeNfo(video, video.PublishedAt.Year, episodeNumber)
+                : BuildMovieNfo(video);
+            await File.WriteAllTextAsync(Path.Combine(videoDir, safeTitle + ".nfo"), refreshedNfo, ct).ConfigureAwait(false);
+            return false; // not a new video, just relocated
         }
 
         Directory.CreateDirectory(videoDir);
@@ -345,6 +500,48 @@ public class LibraryWriter
 
     private static string Normalize(string path) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    /// <summary>
+    /// Moves an existing video folder to reflect a title change, renaming the
+    /// {oldTitle}.* files inside to {newTitle}.* along the way. The .ytmeta
+    /// marker keeps its fixed name so it doesn't need renaming. Returns false
+    /// (leaving the old folder untouched) if the destination already exists,
+    /// to avoid clobbering unrelated data.
+    /// </summary>
+    private bool RenameVideoFolder(string existingDir, string newDir, string newSafeTitle)
+    {
+        if (Directory.Exists(newDir))
+        {
+            _logger.LogWarning(
+                "Cannot rename {Old} -> {New}: destination already exists; leaving both as-is",
+                existingDir, newDir);
+            return false;
+        }
+
+        try
+        {
+            var oldSafeTitle = Path.GetFileName(existingDir);
+            Directory.Move(existingDir, newDir);
+
+            foreach (var ext in new[] { ".strm", ".nfo", ".jpg" })
+            {
+                var oldFile = Path.Combine(newDir, oldSafeTitle + ext);
+                var newFile = Path.Combine(newDir, newSafeTitle + ext);
+                if (File.Exists(oldFile) && !string.Equals(oldFile, newFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Move(oldFile, newFile, overwrite: true);
+                }
+            }
+
+            _logger.LogInformation("Renamed video folder for title change: {Old} -> {New}", existingDir, newDir);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to rename video folder {Old} -> {New}", existingDir, newDir);
+            return false;
+        }
+    }
 
     private static string BuildEpisodeNfo(YouTubeVideo v, int season, int episode)
     {
